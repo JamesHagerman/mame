@@ -583,8 +583,6 @@ WRITE_LINE_MEMBER(esq5505_state::dma_irq)
 INPUT_CHANGED_MEMBER(esq5505_state::key_stroke)
 {
 	// This is called every time a key is pressed or released while running the emulator
-
-	printf("Where is this key?, %x\n", (uint8_t)param);
 	int val = (uint8_t)param;
 	int cmp = 0x60;
 
@@ -595,7 +593,6 @@ INPUT_CHANGED_MEMBER(esq5505_state::key_stroke)
 
 	if (val < cmp)
 	{
-		printf("nope...\n");
 		if (oldval == 0 && newval == 1)
 		{
 			if (val == 0 && shift > 0)
@@ -610,7 +607,7 @@ INPUT_CHANGED_MEMBER(esq5505_state::key_stroke)
 			}
 			else if (val == 0x02)
 			{
-              	printf("Analog tests!\n");
+              	// printf("Analog tests!\n");
 				m_panel->xmit_char(54 | 0x80); m_panel->xmit_char(0); // Preset down
 				m_panel->xmit_char(8 | 0x80);  m_panel->xmit_char(0); // Compare down
 				m_panel->xmit_char(8);         m_panel->xmit_char(0); // Compare up
@@ -623,13 +620,13 @@ INPUT_CHANGED_MEMBER(esq5505_state::key_stroke)
 		if (val < 20) val += shift;
 		if (oldval == 0 && newval == 1)
 		{
-	      	printf("key pressed %d\n", val);
+	      	// printf("key pressed %d\n", val);
 			m_panel->xmit_char(val);
 			m_panel->xmit_char(0x00);
 		}
 		else if (oldval == 1 && newval == 0)
 		{
-	        printf("key off %x\n", (uint8_t)param);
+	        // printf("key off %x\n", (uint8_t)param);
 			m_panel->xmit_char(val&0x7f);
 			m_panel->xmit_char(0x00);
 		}
