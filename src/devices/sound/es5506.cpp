@@ -1024,15 +1024,50 @@ void es550x_device::generate_pcm(es550x_voice *voice, s32 *dest, bool log_addres
 						snprintf(filename, 256, "transwave-synchro-x-%d-%08llx.wav", cycle_index, cycle_start_address);
 						wavraw = util::wav_open(filename, m_sample_rate, 1);
 
-						// Step through each of the 255 bytes in this cycle and buffer them:
-						for (u16 index = 0x00; index <= 0xff; index++) {
+						// Step through each of the 256 bytes in this cycle and buffer them:
+						// // NOTE: 256 samples per cycle is what's "in the masked RAM"... but it's not enough for modern synths.
+						// for (u16 index = 0x00; index <= 0xff; index++) {
+						// 	// Grab the "12bit" sample (actually 16 bit with LSB truncated):
+						// 	buffer[index] = (s16)read_sample(voice, cycle_start_address + index);
+						// }
+
+						// // Write the 255 samples out to the WAV file
+						// util::wav_add_data_16(*wavraw, buffer, 0x100);
+						// util::wav_add_data_16(*full_transwave, buffer, 0x100);
+
+						//  // because we don't have enough single-cycle waves for modern synths otherwise:
+						// util::wav_add_data_16(*full_transwave, buffer, 0x100);
+						// util::wav_add_data_16(*full_transwave, buffer, 0x100);
+
+
+						// Step through each of the 256 bytes in this cycle and buffer them...
+						// ... But ALSO buffer interpolated samples in between the other samples
+						// NOTE: THIS TOTALLY ADDS NOISE. It is not as graceful as the interpolation actually happening in the synth!
+						for (u16 index = 0x00; index <= 0x100; index++) {
 							// Grab the "12bit" sample (actually 16 bit with LSB truncated):
-							buffer[index] = (s16)read_sample(voice, cycle_start_address + index);
+							s16 this_sample = (s16)read_sample(voice, cycle_start_address + index);
+							buffer[index*2] = this_sample;
+
+							// Grab the "next sample" so we can do some math:
+							s16 next_sample = (s16)read_sample(voice, cycle_start_address + index + 1);
+
+							// Store interpolated value:
+							buffer[index*2+1] = this_sample + (next_sample - this_sample) / 2;
 						}
 
-						// Write the 255 samples out to the WAV file
-						util::wav_add_data_16(*wavraw, buffer, 0x100);
-						util::wav_add_data_16(*full_transwave, buffer, 0x100);
+						// Write the 512 samples out to the WAV file
+						util::wav_add_data_16(*wavraw, buffer, 0x200);
+						util::wav_add_data_16(*full_transwave, buffer, 0x200);
+
+						// because we don't have enough single-cycle waves for modern synths otherwise:
+						util::wav_add_data_16(*full_transwave, buffer, 0x200);
+
+						// We need exactly 64 waves that are exactly 512 samples long.
+						// We will double all waves up to the 23rd...
+						if (cycle_index > 23) {
+							// Then we'll triple them to close out at 64 waves
+							util::wav_add_data_16(*full_transwave, buffer, 0x200);
+						}
 
 						// Close the WAV file
 						// "But smart pointerrrrrrs...." means we don't need to?
