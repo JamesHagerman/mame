@@ -112,7 +112,7 @@ protected:
 	virtual void check_for_end_forward(es550x_voice *voice, u64 &accum) = 0;
 	virtual void check_for_end_reverse(es550x_voice *voice, u64 &accum) = 0;
 	void generate_ulaw(es550x_voice *voice, s32 *dest);
-	void generate_pcm(es550x_voice *voice, s32 *dest);
+	void generate_pcm(es550x_voice *voice, s32 *dest, bool log_addresses);
 	inline void generate_irq(es550x_voice *voice, int v);
 	virtual void generate_samples(std::vector<write_stream_view> &outputs) {}
 

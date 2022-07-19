@@ -2,6 +2,32 @@
 // copyright-holders:Aaron Giles
 /**********************************************************************************************
 
+
+
+
+
+ * You should just log out the addressess of things when the ES5505 is grabbing shit from memory...
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
      Ensoniq ES5505/6 driver
      by Aaron Giles
 
@@ -89,6 +115,9 @@ Ensoniq OTIS - ES5505                                            Ensoniq OTTO - 
 #if ES5506_MAKE_WAVS
 #include "sound/wavwrite.h"
 #endif
+
+// for dumping transwaves
+#include "wavwrite.h"
 
 
 /**********************************************************************************************
@@ -907,11 +936,44 @@ void es550x_device::generate_ulaw(es550x_voice *voice, s32 *dest)
      generate_pcm -- general PCM decoding routine
 
 ***********************************************************************************************/
+static u64 current = 0; // Temporarily hold on to the "current" address (based on accum value)
 
-void es550x_device::generate_pcm(es550x_voice *voice, s32 *dest)
+// The lowest and highest addresses need to be "pulled" in the right direction:
+static u64 lowest = std::numeric_limits<uint64_t>::max(); // maximum value of uint64_t/u64 values
+static u64 highest = 0;
+static u32 call_count = 0; // Only log lowest and highest addresses after some number of calls
+static u32 call_limit = 100000; // Log data after this many calls to the method
+
+static s32 raw_sample = 00; // Raw sample we're going to read directly using the "found" addresses
+
+// wav dumping
+static util::wav_file_ptr full_transwave;
+static util::wav_file_ptr wavraw;
+s16 buffer[1024];
+bool alreadyDumped = false;
+
+void es550x_device::generate_pcm(es550x_voice *voice, s32 *dest, bool log_addresses)
 {
 	const u32 freqcount = voice->freqcount;
 	u64 accum = voice->accum & m_address_acc_mask;
+
+	// Keep track of how many times this has been called
+	call_count++;
+
+	// Log data if the method has been called enough times:
+	if (call_count >= call_limit)
+	{
+		call_count = 0;
+
+		// Try printing the _actual_ samples from the ROM (0x00 to 0xff shifted by 0x100 each table):
+		raw_sample = (s16)read_sample(voice, 0x01);
+
+		// printf("jdb: Address log Voice 0: accum: %llx\taddress: %llx\n", accum, get_integer_addr(accum));
+		printf("lowest address: %08llx\thighest address: %08llx\tStart: %08llx\tEnd: %08llx\t\n", lowest, highest, voice->start, voice->end);
+		// reset the lowest and highest address tracking:
+		lowest = std::numeric_limits<uint64_t>::max();
+		highest = 0;
+	}
 
 	// outer loop, in case we switch directions
 	if (!(voice->control & CONTROL_STOPMASK))
@@ -919,6 +981,66 @@ void es550x_device::generate_pcm(es550x_voice *voice, s32 *dest)
 		// two cases: first case is forward direction
 		if (!(voice->control & CONTROL_DIR))
 		{
+			// THIS IS A HACK! This is intended to dump raw addresses for Transwaves...
+			// but does not care about which voice is active!
+			// Cache the address for the current accumulator value:
+			current = get_integer_addr(accum);
+
+			// Update the lowest and highest addresses we've seen:
+			if (current < lowest)
+			{
+				lowest = current;
+			}
+			if (current > highest)
+			{
+				highest = current;
+			}
+
+			// Don't start dumping until the synth starts playing the actual transwave (not sure this matters actually)
+			// if (lowest == 0x00) // First cycle of OMEGA-X
+			if (lowest == 0xF8F1B) // First cycle of SYNCHRO-X
+			{
+				if (!alreadyDumped)
+				{
+					alreadyDumped = true;
+
+					// Dump the SYNCHRO-X Transwave:
+					// Each cycle is 255 bytes long
+					// First cycle is between:	0xF8F1B > 0xF901B
+					// Second cycle is between:	0xF901B > 0xF911B
+					// Last cycle is between:	0xFAB1B > 0xFAC1B
+
+					// Create WAV file with full transwave:
+					full_transwave = util::wav_open("transwave-synchro-x.wav", m_sample_rate, 1);
+
+					// Outter loop steps through each of the single cycle waves.
+					u16 cycle_index = 0;
+					for (u64 cycle_start_address = 0xF8F1B; cycle_start_address <= 0xFAB1B; cycle_start_address = cycle_start_address + 0x100) {
+						// Keep track of the cycle index so the filenames sort correctly:
+						cycle_index++;
+
+						// Open the WAV for writing:
+						char filename[256];
+						snprintf(filename, 256, "transwave-synchro-x-%d-%08llx.wav", cycle_index, cycle_start_address);
+						wavraw = util::wav_open(filename, m_sample_rate, 1);
+
+						// Step through each of the 255 bytes in this cycle and buffer them:
+						for (u16 index = 0x00; index <= 0xff; index++) {
+							// Grab the "12bit" sample (actually 16 bit with LSB truncated):
+							buffer[index] = (s16)read_sample(voice, cycle_start_address + index);
+						}
+
+						// Write the 255 samples out to the WAV file
+						util::wav_add_data_16(*wavraw, buffer, 0x100);
+						util::wav_add_data_16(*full_transwave, buffer, 0x100);
+
+						// Close the WAV file
+						// "But smart pointerrrrrrs...." means we don't need to?
+						// util::wav_close(*wavraw);
+					}
+				}
+			}
+
 			// fetch two samples
 			s32 val1 = (s16)read_sample(voice, get_integer_addr(accum));
 			s32 val2 = (s16)read_sample(voice, get_integer_addr(accum, 1));
@@ -1036,7 +1158,7 @@ void es5506_device::generate_samples(std::vector<write_stream_view> &outputs)
 			if (voice->control & CONTROL_CMPD)
 				generate_ulaw(voice, &cursample[l]);
 			else
-				generate_pcm(voice, &cursample[l]);
+				generate_pcm(voice, &cursample[l], false);
 
 			// does this voice have it's IRQ bit raised?
 			generate_irq(voice, v);
@@ -1050,6 +1172,7 @@ void es5506_device::generate_samples(std::vector<write_stream_view> &outputs)
 void es5505_device::generate_samples(std::vector<write_stream_view> &outputs)
 {
 	// loop while we still have samples to generate
+	static bool address_logging_enabled = false;
 	for (int sampindex = 0; sampindex < outputs[0].samples(); sampindex++)
 	{
 		// loop over voices
@@ -1074,7 +1197,12 @@ void es5505_device::generate_samples(std::vector<write_stream_view> &outputs)
 
 			// generate from the appropriate source
 			// no compressed sample support
-			generate_pcm(voice, &cursample[l]);
+			if (v == 0) {
+				address_logging_enabled = true;
+			} else {
+				address_logging_enabled = false;
+			}
+			generate_pcm(voice, &cursample[l], address_logging_enabled);
 
 			// does this voice have it's IRQ bit raised?
 			generate_irq(voice, v);

@@ -16,7 +16,7 @@ git clone git@github.com:JamesHagerman/mame.git
 ```
 
 - Compile with `-j9` (CPU cores + 1) and some linker stuff
-`make -j9 ARCHOPTS="-fuse-ld=lld"`
+`make -j9 ARCHOPTS="-fuse-ld=lld" SOURCES=src/mame/ensoniq/esq5505.cpp`
 
 
 ## Running VFX emulator
@@ -92,3 +92,155 @@ Stuff I KNow:
 
 
 
+## Reverse engineering the ROM dumps into a single cohesive 12bit PCM file
+
+
+- 8 bits from LO (U14) + High Nibble from NYB (U16) (pins D0-D3)
+- 8 bits from HI (U15) + Low Nibble from NYB (U16) (pins D4-D7)
+
+8 bits is a byte (0x00 through 0xFF)
+
+Nibble is 4 bits (halfbyte)
+
+So to get 12 bit samples from each bank:
+
+@0x00 - Bank 1:  0x00 (from u14) + 0x*9 (from u16) = 0x009
+@0x00 - Bank 2:  0x00 (from u15) + 0x9* (from u16) = 0x009
+
+@0x01 - Bank 1:  0x05 (from u14) + 0x*2 (from u16) = 0x052
+@0x01 - Bank 2:  0xCA (from u15) + 0xF* (from u16) = 0xCAF
+
+Are those correct or am I ordering them wrong?
+
+```c++
+void esq5505_state::init_denib()
+{
+	uint8_t *pNibbles = (uint8_t *)memregion("nibbles")->base();
+	uint8_t *pBS0L = (uint8_t *)memregion("waverom")->base();
+	uint8_t *pBS0H = pBS0L + 0x100000;
+
+	init_common();
+
+	// create the 12 bit samples by patching in the nibbles from the nibble ROM
+	// low nibbles go with the lower ROM, high nibbles with the upper ROM
+	for (int i = 0; i < 0x80000; i++)
+	{
+		*pBS0L = (*pNibbles & 0x0f) << 4;
+		*pBS0H = (*pNibbles & 0xf0);
+		pBS0L += 2;
+		pBS0H += 2;
+		pNibbles++;
+	}
+}
+```
+
+So, the U14 and U15 (which hold 1 byte at each memory offset) are loaded into MAME as 16bit values:
+
+I.e. The low bytes `00 05 09 06` (from u14.bin) end up being loaded into memory as 16 bit words:
+
+```
+00 ??
+05 ??
+09 ??
+06 ??
+```
+
+And then the low nibbles `?9 ?2 ?8 ?9` (from u16/bin) get shifted left 4, then plopped in behind the existing high byte of the 16 bit value at that address:
+
+```
+00 90
+05 20
+09 80
+06 90
+```
+
+And that's where we get 12 bit samples... But I'm still not sure which way around they need to be...
+
+
+0x00 = 144 decimal based on logging from emulator...  which is `0x0090` so that's good!
+0x01 = 1312 decimal... which is `0x0520`! So that is absolutely the correct logic for grabbing the data!
+
+I wonder if I should just dump the PCM data directly instead of all this separate magic...
+
+The problem is each Transwave shifts through memory differently.
+
+- OMEGA-X is literally shifting a 1-byte-wide single-cycle sample from 0x000-0x100 (sample 0) to 0x1f00-0x2000 by about 0xff every "slot" of the wave table.
+	- Which means each "single cycle waveform" is 255 samples long, where each sample is 12-bits.
+
+
+After some digging, as modern computers expect 16-bit wave files, convention is to maintain the most significant bits and shove the 12 bit samples into the top 16 bits. And since we're using twos-compliment, the MSB represents sign and we're still good.
+
+I'm going to try writing the first cycle, 0x00-0xff out to a single channel wav file at 16 bit as soon as the code starts seeing bits.
+
+Weirdly, I'll probably need to increment a false, 29 bit accumulator separately from the actual address, so that the address lookup code gets called correctly.
+
+Ooooor, I'll need to record ALL of the addresses being used when a REALLY low note plays and the accumulator is slow.
+
+This code appears to try writing a WAV file (it's used for something else I don't really care about). I think it can be used to write out our wave tables.
+
+```c++
+#if ES5506_MAKE_WAVS
+	// start the logging once we have a sample rate
+	if (m_sample_rate)
+	{
+		if (!m_wavraw)
+			m_wavraw = wav_open("raw.wav", m_sample_rate, 2);
+	}
+#endif
+
+	// loop until all samples are output
+	generate_samples(outputs);
+
+#if ES5506_MAKE_WAVS
+	// log the raw data
+	if (m_wavraw)
+	{
+		// determine left/right source data
+
+		s32 *lsrc = m_scratch, *rsrc = m_scratch + length;
+		int channel;
+		memset(lsrc, 0, sizeof(s32) * length * 2);
+		// loop over the output channels
+		for (channel = 0; channel < m_channels; channel++)
+		{
+			s32 *l = outputs[(channel << 1)] + sampindex;
+			s32 *r = outputs[(channel << 1) + 1] + sampindex;
+			// add the current channel's samples to the WAV data
+			for (samp = 0; samp < length; samp++)
+			{
+				lsrc[samp] += l[samp];
+				rsrc[samp] += r[samp];
+			}
+		}
+		wav_add_data_32lr(m_wavraw, lsrc, rsrc, length, 4);
+	}
+#endif
+```
+
+But we wanna do 16 bit, 1 channel. So:
+
+```c++
+void * m_wavraw;
+s16 buffer[1024];
+bool alreadyDumped = false;
+if (!alreadyDumped)
+{
+	alreadyDumped = true;
+
+	// Open the WAV for writing:
+	m_wavraw = wav_open("raw.wav", m_sample_rate, 1);
+
+	// Step through the lower 0xff addresses in the ROM and shove them in a buffer:
+	for (u16 index = 0x00; index <= 0xff; index++) {
+		// Grab the "12bit" sample (actually 16 bit with padded LSB)
+		buffer[index] = (s16)read_sample(voice, index);
+	}
+
+	// Write the 0xff samples out to the WAV file
+	wav_add_data_16(*m_wav_file, buffer, 0xff);
+
+	// Close the WAV file
+	wav_close(m_wavraw);
+}
+
+```
