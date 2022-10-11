@@ -15,9 +15,36 @@ cd src/
 git clone git@github.com:JamesHagerman/mame.git
 ```
 
+- cd src\mame
+
 - Compile with `-j9` (CPU cores + 1) and some linker stuff
 `make -j9 ARCHOPTS="-fuse-ld=lld" SOURCES=src/mame/ensoniq/esq5505.cpp`
 
+
+## How to pick this up again when you forget
+
+- MAME source tree lives under `C:\Users\Public\msys64\src\mame`
+- Start compiler environment by opening `C:\Users\Public\msys64` folder in Windows, double click on `win32env.bat`
+- `cd mame`
+- Then compile with: `make -j9 ARCHOPTS="-fuse-ld=lld" SOURCES=src/mame/ensoniq/esq5505.cpp`
+- Run with: `./mame.exe vfx -midiin "MIDI4x4" -http`
+- Open [http://localhost:8080/esqpanel/FrontPanel.html](http://localhost:8080/esqpanel/FrontPanel.html) in a broswer on the same machine
+
+
+OR connect to MIDI-OX using loopMIDI
+- `./mame.exe vfx -midiin "loopMIDI Port To" -midiout "loopMIDI Port From" -http`
+
+Then, in MIDI-OX, in MIDI Devices window, select:
+```
+MIDI Inputs:
+loopMIDI Port From	To receive SYSEX dumps FROM the virtual VFX
+MIDI4x4            	To receive midi from a real midi source
+
+MIDI Outputs:
+loopMIDI Port To 	To transmit SYSEX and MIDI notes/CC down to the virtual VFX
+```
+
+!! DO NOT FORGET TO ENABLE SYSEX IN THE VFX EMULATION EVERY BOOT UP !!
 
 ## Running VFX emulator
 

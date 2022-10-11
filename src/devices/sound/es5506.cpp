@@ -1011,6 +1011,8 @@ void es550x_device::generate_pcm(es550x_voice *voice, s32 *dest, bool log_addres
 					// Last cycle is between:	0xFAB1B > 0xFAC1B
 
 					// Create WAV file with full transwave:
+					// But WHY is the sample rate of the final output 29761 Hz? Because that's what the synth seems to run at??
+					// We need it at something more modern...
 					full_transwave = util::wav_open("transwave-synchro-x.wav", m_sample_rate, 1);
 
 					// Outter loop steps through each of the single cycle waves.
@@ -1057,20 +1059,23 @@ void es550x_device::generate_pcm(es550x_voice *voice, s32 *dest, bool log_addres
 
 						// Write the 512 samples out to the WAV file
 						util::wav_add_data_16(*wavraw, buffer, 0x200);
+
+						// Write the wave once
 						util::wav_add_data_16(*full_transwave, buffer, 0x200);
 
-						// because we don't have enough single-cycle waves for modern synths otherwise:
+						// Write the wave a second time:
+						// Why? Well, the SYNCHRO-X wave I was trying to extract here has 29 waves... but one of the
+						// synths I was trying to load that transwave into, the Korg modwave, requires 64 waves. So,
+						// instead of trying to stitch together waves, I decided to double all waves up to the 23rd...
 						util::wav_add_data_16(*full_transwave, buffer, 0x200);
-
-						// We need exactly 64 waves that are exactly 512 samples long.
-						// We will double all waves up to the 23rd...
+						// ... then after doubling all the waves up to the 23rd wave, I'd add a 3rd wave for the remaining
+						// bunch to bring the total up to 64. Hacky? Yeah, but this whole project is...
 						if (cycle_index > 23) {
-							// Then we'll triple them to close out at 64 waves
 							util::wav_add_data_16(*full_transwave, buffer, 0x200);
 						}
 
 						// Close the WAV file
-						// "But smart pointerrrrrrs...." means we don't need to?
+						// "But smart pointerrrrrrs...." means we don't need to? It works on my machine...
 						// util::wav_close(*wavraw);
 					}
 				}
